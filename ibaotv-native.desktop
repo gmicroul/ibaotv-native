@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=小宝影院
+Name[en]=Xiaobao Cinema
+Comment=小宝影院原生版（在线搜索/选集/m3u8 播放）
+Exec=/home/phablet/ibaotv/ibaotv-launcher.sh
+Icon=ibaotv-native
+Terminal=false
+Categories=AudioVideo;Video;Player;
+StartupNotify=true
+X-Lomiri-Touch=true

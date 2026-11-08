@@ -1,0 +1,6 @@
+/build/
+/node/bin/
+/packaging/root/
+/packaging/click/stage/
+/ibaotv-native
+/ibaotv-native_*.deb
