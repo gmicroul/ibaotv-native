@@ -6,9 +6,9 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$HERE/.."
-VER="0.2.1-1"
+VER="0.2.2-1"
 STAGE="$HERE/root"
-DEB="$SRC/ibaotv-native_0.2.1-1_arm64.deb"
+DEB="$SRC/ibaotv-native_0.2.2-1_arm64.deb"
 
 echo "==> 重新构建二进制"
 "$SRC/build.sh"
@@ -40,7 +40,7 @@ ln -s /opt/ibaotv-native/ibaotv-native "$STAGE/usr/bin/ibaotv-native"
 
 cat > "$STAGE/DEBIAN/control" <<'EOF'
 Package: ibaotv-native
-Version: 0.2.1-1
+Version: 0.2.2-1
 Section: video
 Priority: optional
 Architecture: arm64

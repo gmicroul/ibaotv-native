@@ -330,7 +330,9 @@ public:
     explicit DownloadManager(QObject *parent = nullptr)
         : QObject(parent)
     {
-        m_dir = QDir::homePath() + QStringLiteral("/Videos/小宝影院");
+        // media-hub 只允许 click 应用读自己包名的 cache 目录，下载放这里才能本地播放
+        m_dir = QDir::homePath()
+            + QStringLiteral("/.cache/ibaotv.utu/ibaotv-native/downloads");
         QDir().mkpath(m_dir);
         m_uiTimer.setSingleShot(true);
         m_uiTimer.setInterval(500);
@@ -460,6 +462,38 @@ public:
     Q_INVOKABLE void openFolder()
     {
         QDesktopServices::openUrl(QUrl::fromLocalFile(m_dir));
+    }
+
+    // 复制一份到 ~/Videos/小宝影院/（用户可见；给 uVideo 等其他播放器用）
+    Q_INVOKABLE void exportTask(const QString &key)
+    {
+        Task *t = find(key);
+        if (!t || t->status != QStringLiteral("已完成") || t->file.isEmpty()
+                || !QFileInfo::exists(t->file))
+            return;
+        const QString dstDir = QDir::homePath() + QStringLiteral("/Videos/小宝影院")
+            + QLatin1Char('/') + sanitize(t->title.isEmpty() ? t->vod : t->title);
+        QDir().mkpath(dstDir);
+        const QString dst = dstDir + QLatin1Char('/') + QFileInfo(t->file).fileName();
+        if (QFileInfo::exists(dst)) {
+            t->error = QStringLiteral("Videos 里已有同名文件");
+            rebuild();
+            return;
+        }
+        t->error = QStringLiteral("导出中…");
+        rebuild();
+        QProcess *p = new QProcess(this);
+        connect(p, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+                [this, t, p, dst](int code, QProcess::ExitStatus) {
+            p->deleteLater();
+            if (m_tasks.contains(t)) {
+                t->error = (code == 0 && QFileInfo::exists(dst))
+                    ? QStringLiteral("已导出到 Videos")
+                    : QStringLiteral("导出失败");
+                rebuild();
+            }
+        });
+        p->start(QStringLiteral("cp"), { QStringLiteral("-n"), t->file, dst });
     }
 
 signals:
@@ -852,11 +886,39 @@ private:
             t->bytes = m.value(QStringLiteral("bytes")).toLongLong();
             t->file = m.value(QStringLiteral("file")).toString();
             t->error = m.value(QStringLiteral("error")).toString();
+            // 旧版本下载在 ~/Videos（media-hub 不放行），迁移进缓存目录
+            if (!t->file.isEmpty() && QFileInfo::exists(t->file)
+                    && !t->file.startsWith(m_dir)) {
+                const QString titleDir = m_dir + QLatin1Char('/')
+                    + sanitize(t->title.isEmpty() ? t->vod : t->title);
+                QDir().mkpath(titleDir);
+                const QString target = titleDir + QLatin1Char('/')
+                    + QFileInfo(t->file).fileName();
+                if (QFile::exists(target) || QFile::rename(t->file, target)
+                        || QFile::copy(t->file, target))
+                    t->file = target;
+            }
             if (isActive(t->status)) {
-                t->status = QStringLiteral("已中断");
-                t->error = QStringLiteral("上次未完成，可重试");
-                t->percent = 0;
-                t->speed = 0;
+                if (!t->file.isEmpty() && QFileInfo::exists(t->file)) {
+                    // .mp4 只有整集合并成功才会存在，说明上次其实下完了
+                    t->status = QStringLiteral("已完成");
+                    t->error.clear();
+                    t->percent = 100;
+                    t->speed = 0;
+                } else {
+                    // 旧版下载中断留下的 .ts.part（在 ~/Videos），清掉释放空间
+                    if (!t->file.isEmpty() && !t->file.startsWith(m_dir)
+                            && t->file.endsWith(QStringLiteral(".mp4"))) {
+                        const QString part = t->file.left(t->file.size() - 4)
+                            + QStringLiteral(".ts.part");
+                        if (QFileInfo::exists(part))
+                            QFile::remove(part);
+                    }
+                    t->status = QStringLiteral("已中断");
+                    t->error = QStringLiteral("上次未完成，可重试");
+                    t->percent = 0;
+                    t->speed = 0;
+                }
             } else if (t->status == QStringLiteral("已完成") && !t->file.isEmpty()
                        && !QFileInfo::exists(t->file)) {
                 t->status = QStringLiteral("失败");
@@ -906,7 +968,7 @@ int main(int argc, char *argv[])
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("ibaotv-native"));
     app.setOrganizationName(QStringLiteral("ibaotv"));
-    app.setApplicationVersion(QStringLiteral("0.2.1"));
+    app.setApplicationVersion(QStringLiteral("0.2.2"));
 
     {
         const QString logDir = QDir::homePath() + QStringLiteral("/.cache/ibaotv.utu/ibaotv-native");

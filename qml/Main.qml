@@ -78,6 +78,8 @@ ApplicationWindow {
     property double lastPos: -1
     property double lastAdvanceMs: 0
     property bool loadStuck: false
+    property double pendingSeek: -1
+    property double lastSeekTarget: -1
     property bool miniVisible: curFile !== "" && !fetching
         && stack.currentItem && stack.currentItem.objectName !== "ibplayer"
     property bool playerActive: stack.currentItem && stack.currentItem.objectName === "ibplayer"
@@ -210,6 +212,45 @@ ApplicationWindow {
         if (!playerActive)
             stack.push(playerPage)
         kickTimer.restart()
+    }
+    function reloadAt(ms) {
+        if (root.curFile === "")
+            return
+        try { video.seekDone = true } catch (e) {}
+        root.pendingSeek = Math.max(0, ms)
+        root.lastPos = -1
+        root.loadStuck = false
+        var f = root.curFile
+        root.curFile = ""
+        root.curFile = f
+        wantPlay = true
+        loadStartMs = Date.now()
+        lastAdvanceMs = Date.now()
+        pendingSeekTimer.restart()
+        kickTimer.restart()
+    }
+    function doSeek(target) {
+        if (root.curFile === "")
+            return
+        if (target < 0)
+            target = 0
+        if (video.duration > 0 && target > video.duration - 1000)
+            target = Math.max(0, video.duration - 1000)
+        if (video.seekable) {
+            video.seek(target)
+        } else {
+            root.reloadAt(target)
+        }
+        root.showControls = true
+        hideUITimer.restart()
+    }
+    function jumpBy(deltaMs) {
+        if (root.curFile === "" || root.fetching)
+            return
+        var cur = root.seekDragging ? seekBar.value : video.position
+        if (cur < 0)
+            cur = 0
+        root.doSeek(cur + deltaMs)
     }
 
     function onVideoError(who, code, estr) {
@@ -642,12 +683,17 @@ ApplicationWindow {
                 if (video.duration > 0 && video.position === lastPos && wantPlay
                         && video.status !== MediaPlayer.BufferingMedia
                         && video.status !== MediaPlayer.StalledMedia
-                        && Date.now() - lastAdvanceMs > 6000 && Date.now() - loadStartMs > 6000) {
-                    backend.logLine("FROZEN reset pos=" + Math.round(video.position))
-                    lastAdvanceMs = Date.now()
+                        && Date.now() - lastAdvanceMs > 8000 && Date.now() - loadStartMs > 8000) {
+                    var rp = video.position
+                    backend.logLine("RELOAD-STALL pos=" + Math.round(rp))
                     loadStuck = true
-                    video.pause()
-                    resumeTimer.restart()
+                    if (rp > 1000) {
+                        root.reloadAt(rp)
+                    } else {
+                        lastAdvanceMs = Date.now()
+                        video.pause()
+                        resumeTimer.restart()
+                    }
                 } else if (video.position !== lastPos) {
                     lastPos = video.position
                     lastAdvanceMs = Date.now()
@@ -656,7 +702,10 @@ ApplicationWindow {
                 return
             }
             if (video.playbackState === MediaPlayer.PausedState) {
-                stop()
+                if (wantPlay && root.pendingSeek < 0)
+                    video.play()
+                else if (!wantPlay && root.pendingSeek < 0)
+                    stop()
                 return
             }
             if ((video.status === MediaPlayer.LoadedMedia || video.status === MediaPlayer.Buffered)
@@ -670,11 +719,8 @@ ApplicationWindow {
                     && video.status !== MediaPlayer.BufferingMedia
                     && video.status !== MediaPlayer.StalledMedia) {
                 backend.logLine("WATCHDOG reload st=" + video.status + " url=" + root.curFile)
-                loadStuck = true
-                var f = root.curFile
-                root.curFile = ""
-                root.curFile = f
-                loadStartMs = Date.now()
+                root.loadStuck = true
+                root.reloadAt(Math.max(0, video.position))
             }
         }
     }
@@ -686,6 +732,52 @@ ApplicationWindow {
             if (wantPlay && root.curFile !== "" && !root.fetching
                     && video.playbackState === MediaPlayer.PausedState)
                 video.play()
+        }
+    }
+    Timer {
+        id: pendingSeekTimer
+        interval: 400
+        repeat: true
+        onTriggered: {
+            if (root.pendingSeek < 0) {
+                stop()
+                return
+            }
+            var st = video.status
+            if (st === MediaPlayer.LoadedMedia || st === MediaPlayer.Buffered
+                    || st === MediaPlayer.EndOfMedia
+                    || (video.duration > 0 && Date.now() - root.loadStartMs > 1500)) {
+                var ps = root.pendingSeek
+                root.pendingSeek = -1
+                stop()
+                if (ps > 0) {
+                    video.seek(ps)
+                    root.lastSeekTarget = ps
+                    seekCheckTimer.restart()
+                }
+                kickTimer.restart()
+            } else if (Date.now() - root.loadStartMs > 20000) {
+                stop()
+                root.pendingSeek = -1
+                root.statusMsg = "定位失败，已从头播放"
+            }
+        }
+    }
+    Timer {
+        id: seekCheckTimer
+        interval: 3000
+        repeat: false
+        onTriggered: {
+            if (root.lastSeekTarget < 0)
+                return
+            var t = root.lastSeekTarget
+            root.lastSeekTarget = -1
+            if (root.wantPlay && video.duration > 0
+                    && Math.abs(video.position - t) > 8000) {
+                backend.logLine("SEEK-RETRY target=" + Math.round(t)
+                                + " pos=" + Math.round(video.position))
+                video.position = t
+            }
         }
     }
     Timer {
@@ -713,13 +805,15 @@ ApplicationWindow {
             source: root.fileUrl()
             onStatusChanged: {
                 if ((status === MediaPlayer.LoadedMedia || status === MediaPlayer.Buffered)
-                        && playbackState === MediaPlayer.StoppedState && !seekDone) {
+                        && !seekDone && root.pendingSeek < 0) {
                     seekDone = true
-                    var sv = root.curKey()
-                    if (sv !== "") {
-                        var spos = backend.loadPos(sv)
-                        if (spos > 5000 && spos < duration - 10000)
-                            seek(spos)
+                    if (playbackState === MediaPlayer.StoppedState) {
+                        var sv = root.curKey()
+                        if (sv !== "") {
+                            var spos = backend.loadPos(sv)
+                            if (spos > 5000 && spos < duration - 10000)
+                                seek(spos)
+                        }
                     }
                 }
                 if (status === MediaPlayer.EndOfMedia) {
@@ -855,7 +949,7 @@ ApplicationWindow {
             z: 3
             visible: root.showControls
             anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-            height: 300
+            height: 400
             gradient: Gradient {
                 GradientStop { position: 0; color: "transparent" }
                 GradientStop { position: 1; color: Qt.rgba(0, 0, 0, 0.8) }
@@ -897,12 +991,7 @@ ApplicationWindow {
                                 root.seekDragging = true
                             } else {
                                 root.seekDragging = false
-                                if (video.seekable)
-                                    video.seek(value)
-                                else
-                                    video.position = value
-                                root.showControls = true
-                                hideUITimer.restart()
+                                root.doSeek(value)
                             }
                         }
                     }
@@ -912,6 +1001,24 @@ ApplicationWindow {
                         font.pixelSize: 30
                         Layout.preferredWidth: 170
                         horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+                Row {
+                    Layout.alignment: Qt.AlignHCenter
+                    spacing: 40
+                    Button {
+                        text: "快退10秒"
+                        flat: true
+                        font.pixelSize: 30
+                        enabled: root.curFile !== "" && video.duration > 0
+                        onClicked: root.jumpBy(-10000)
+                    }
+                    Button {
+                        text: "快进10秒"
+                        flat: true
+                        font.pixelSize: 30
+                        enabled: root.curFile !== "" && video.duration > 0
+                        onClicked: root.jumpBy(10000)
                     }
                 }
                 Row {
@@ -1392,7 +1499,7 @@ ApplicationWindow {
                     Layout.leftMargin: root.pageMargin
                     Layout.rightMargin: root.pageMargin
                     Layout.fillWidth: true
-                    text: "保存在 " + downloader.dir
+                    text: "保存在 " + downloader.dir + "（任务里点“导出”可复制到 Videos）"
                     color: root.cSecondary
                     font.pixelSize: 26
                     wrapMode: Text.Wrap
@@ -1452,6 +1559,13 @@ ApplicationWindow {
                                     font.pixelSize: 28
                                     visible: modelData.status === "已完成"
                                     onClicked: root.playLocal(modelData)
+                                }
+                                Button {
+                                    text: "导出"
+                                    flat: true
+                                    font.pixelSize: 28
+                                    visible: modelData.status === "已完成"
+                                    onClicked: downloader.exportTask(modelData.key)
                                 }
                                 Button {
                                     text: "重试"
