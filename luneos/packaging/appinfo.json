@@ -1,0 +1,11 @@
+{
+    "id": "org.ibaotv.native",
+    "title": "小宝影院",
+    "version": "0.2.2",
+    "vendor": "ibaotv",
+    "type": "native",
+    "main": "ibaotv-native",
+    "icon": "icon.png",
+    "uiRevision": 2,
+    "requiredPermissions": ["audio.operation"]
+}

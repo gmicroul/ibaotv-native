@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+application_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg}"
+export QT_QPA_PLATFORM=wayland
+export QT_WAYLAND_SHELL_INTEGRATION=webos
+export QT_WAYLAND_DISABLE_WINDOWDECORATION=1
+export QT_WAYLAND_WEBOS_APP_ID=org.ibaotv.native
+export QT_WAYLAND_HARDWARE_INTEGRATION=wayland-egl
+export QT_IM_MODULE=wayland-webos
+export PULSE_SERVER="${PULSE_SERVER:-unix:/run/pulse/native}"
+export PULSE_SINK="${PULSE_SINK:-pmedia}"
+export PULSE_PROP="${PULSE_PROP:-media.type=media media.role=video application.id=org.ibaotv.native}"
+exec "$application_directory/bin/ibaotv-native" "$@" >> /tmp/ibaotv-luneos.log 2>&1

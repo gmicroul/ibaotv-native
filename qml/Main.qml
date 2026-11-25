@@ -80,6 +80,7 @@ ApplicationWindow {
     property bool loadStuck: false
     property double pendingSeek: -1
     property double lastSeekTarget: -1
+    property bool reloadBusy: false
     property bool miniVisible: curFile !== "" && !fetching
         && stack.currentItem && stack.currentItem.objectName !== "ibplayer"
     property bool playerActive: stack.currentItem && stack.currentItem.objectName === "ibplayer"
@@ -208,6 +209,9 @@ ApplicationWindow {
         autoRetried = false
         fromAuto = false
         showControls = true
+        reloadBusy = false
+        pendingSeek = -1
+        lastSeekTarget = -1
         curFile = t.file
         if (!playerActive)
             stack.push(playerPage)
@@ -216,8 +220,11 @@ ApplicationWindow {
     function reloadAt(ms) {
         if (root.curFile === "")
             return
-        try { video.seekDone = true } catch (e) {}
         root.pendingSeek = Math.max(0, ms)
+        if (root.reloadBusy)
+            return
+        root.reloadBusy = true
+        try { video.seekDone = true } catch (e) {}
         root.lastPos = -1
         root.loadStuck = false
         var f = root.curFile
@@ -230,7 +237,7 @@ ApplicationWindow {
         kickTimer.restart()
     }
     function doSeek(target) {
-        if (root.curFile === "")
+        if (root.curFile === "" || root.seekDragging)
             return
         if (target < 0)
             target = 0
@@ -445,6 +452,9 @@ ApplicationWindow {
         backend.saveHistory(dSid, dTitle, i + 1, 0, dCover)
         refreshHistory()
         errRetry = 0
+        reloadBusy = false
+        pendingSeek = -1
+        lastSeekTarget = -1
         if (url === curFile)
             curFile = ""
         curFile = url
@@ -496,7 +506,8 @@ ApplicationWindow {
     }
 
     function refreshHistory() {
-        historyList = backend.history()
+        var h = backend.history()
+        historyList = h && h.length ? h : []
         posRevision++
     }
 
@@ -680,7 +691,8 @@ ApplicationWindow {
                 return
             }
             if (video.playbackState === MediaPlayer.PlayingState) {
-                if (video.duration > 0 && video.position === lastPos && wantPlay
+                if (!root.seekDragging && !root.reloadBusy
+                        && video.duration > 0 && video.position === lastPos && wantPlay
                         && video.status !== MediaPlayer.BufferingMedia
                         && video.status !== MediaPlayer.StalledMedia
                         && Date.now() - lastAdvanceMs > 8000 && Date.now() - loadStartMs > 8000) {
@@ -740,6 +752,7 @@ ApplicationWindow {
         repeat: true
         onTriggered: {
             if (root.pendingSeek < 0) {
+                root.reloadBusy = false
                 stop()
                 return
             }
@@ -749,6 +762,7 @@ ApplicationWindow {
                     || (video.duration > 0 && Date.now() - root.loadStartMs > 1500)) {
                 var ps = root.pendingSeek
                 root.pendingSeek = -1
+                root.reloadBusy = false
                 stop()
                 if (ps > 0) {
                     video.seek(ps)
@@ -759,6 +773,7 @@ ApplicationWindow {
             } else if (Date.now() - root.loadStartMs > 20000) {
                 stop()
                 root.pendingSeek = -1
+                root.reloadBusy = false
                 root.statusMsg = "定位失败，已从头播放"
             }
         }
@@ -881,11 +896,8 @@ ApplicationWindow {
                         root.switchEpisode(dy < 0 ? 1 : -1)
                     }
                 } else if (dragging) {
-                    if (video.seekable)
-                        video.seek(seekBar.value)
-                    else
-                        video.position = seekBar.value
                     root.seekDragging = false
+                    root.doSeek(seekBar.value)
                     root.showControls = true
                     hideUITimer.restart()
                 } else {
@@ -1672,7 +1684,9 @@ ApplicationWindow {
                     enabled: root.historyList.length > 0
                     onClicked: {
                         backend.clearHistory()
+                        historyList = []
                         root.refreshHistory()
+                        root.refreshResume()
                     }
                 }
             }

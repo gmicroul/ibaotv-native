@@ -23,6 +23,7 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QSettings>
+#include <QStringList>
 #include <QStandardPaths>
 #include <QDir>
 #include <QFile>
@@ -223,7 +224,16 @@ public:
 
     Q_INVOKABLE void clearHistory()
     {
-        QSettings().remove(QStringLiteral("history/list"));
+        QSettings s;
+        const QStringList keys = s.allKeys();
+        for (const QString &key : keys) {
+            if (key == QStringLiteral("history/list")
+                    || key.startsWith(QStringLiteral("pos/"))
+                    || key == QStringLiteral("last/sid")
+                    || key == QStringLiteral("last/vid"))
+                s.remove(key);
+        }
+        s.sync();
     }
 
     // ---- 设置 ----

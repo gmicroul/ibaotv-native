@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+if test "$#" -ne 2; then
+    printf 'Usage: luna-call luna://service/method JSON\n' >&2
+    exit 2
+fi
+directory=$(mktemp -d /tmp/ibaotv-luna-call.XXXXXX)
+trap 'exec 3>&-; rm -rf -- "$directory"' EXIT
+mkfifo "$directory/input"
+exec 3<> "$directory/input"
+response=$(luna-send -f -n 1 -w 5000 "$1" "$2" <&3)
+printf '%s\n' "$response"
+if ! printf '%s\n' "$response" | grep -Eq '"returnValue"[[:space:]]*:[[:space:]]*true'; then
+    printf 'Luna service call failed: %s\n' "$1" >&2
+    exit 1
+fi
